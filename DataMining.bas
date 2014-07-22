@@ -241,7 +241,7 @@ Sub UpdateSchema(source As dao.Recordset, targetTableName)
             Else
 
                 Set col = New ADOX.Column
-                col.Name = colName
+                col.Name = "[" & colName & "]"
                 col.Attributes = adColNullable
 
                 col.Type = GetSQLDataType(f.Type)
