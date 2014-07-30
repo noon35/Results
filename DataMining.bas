@@ -2,6 +2,7 @@ Attribute VB_Name = "DataMining"
 Option Compare Database
 Option Explicit
 Sub CreateResultsTable(ByVal tableName As String)
+    'Creates the base results table. Specific fields from the actual recordset are appended later on in UpdateSchema.
 
     Dim cat As New ADOX.Catalog
     Dim t As ADOX.Table
@@ -78,7 +79,7 @@ End Function
 
 
 
-Sub ExamineDatabases(ByVal resultsTable As String, ByVal SQL As String, Optional ByVal maxfileCount As Long = 50000)
+Sub ExamineDatabases(ByVal resultsTable As String, ByVal SQL As String, Optional ByVal maxfilecount As Long = 50000)
     Dim f As File
     Dim fileName As String
     Dim fso As New FileSystemObject
@@ -108,7 +109,7 @@ Sub ExamineDatabases(ByVal resultsTable As String, ByVal SQL As String, Optional
     
     For Each f In fso.GetFolder(GetDatabaseStorageFolder).Files
         'uncomment to skip databases
-        'If f.Name < "shoreline.mdb" Then GoTo nextFile
+        'If f.Name < "Casowasco.mdb" Then GoTo nextFile
         
         If f.Path Like "*.mdb" Or f.Path Like "*.accdb" Then
             fileCount = fileCount + 1
@@ -127,6 +128,7 @@ Sub ExamineDatabases(ByVal resultsTable As String, ByVal SQL As String, Optional
             End If
 
             
+            'Add any fields from that recordset that are not already in the base table
             UpdateSchema rs, resultsTable
 
             rsResults.Open resultsTable, conn, adOpenKeyset, adLockBatchOptimistic, adCmdTable
@@ -141,7 +143,7 @@ Sub ExamineDatabases(ByVal resultsTable As String, ByVal SQL As String, Optional
                         'On Error Resume Next
                         tempval = fd.Value
                         If fd.Type = dbDate And tempval < #1/1/1900# Then tempval = #1/1/1900#
-                        rsResults.Fields(Replace(fd.Name, ".", "_")).Value = tempval
+                        rsResults.Fields(SafeFieldName(fd.Name)).Value = tempval
                     Next
                     On Error GoTo egghead
                     .Update
@@ -157,7 +159,7 @@ Sub ExamineDatabases(ByVal resultsTable As String, ByVal SQL As String, Optional
 
 nextFile:
         Set db = Nothing
-        If fileCount = maxfileCount Then Exit For
+        If fileCount = maxfilecount Then Exit For
         Forms!form1.Refresh
         DoEvents
     Next
@@ -208,6 +210,114 @@ Function GetDatabaseStorageFolder() As String
 End Function
 
 
+Sub GetSchemas()
+    Dim f As File
+    Dim fileName As String
+    Dim fso As New FileSystemObject
+    Dim db As Database
+    Dim td As TableDef
+    Dim fd As Field
+    Dim fileCount As Long
+    Dim rsErrorLog As New ADODB.Recordset
+
+    Dim dbResults As Database
+    Dim rsResults As New ADODB.Recordset
+    Dim maxfilecount As Long
+    
+    maxfilecount = 1000
+
+    Dim conn As ADODB.Connection
+    Dim tableList As Collection
+
+
+    On Error GoTo egghead
+
+    Set dbResults = CurrentDb
+
+    Set conn = GetConnection
+    conn.Open
+
+    conn.Execute "DELETE FROM DatabaseSchemas"
+    
+    For Each f In fso.GetFolder(GetDatabaseStorageFolder).Files
+        'uncomment to skip databases
+        'If f.Name < "Casowasco.mdb" Then GoTo nextFile
+        
+        If f.Path Like "*.mdb" Or f.Path Like "*.accdb" Then
+            fileCount = fileCount + 1
+            fileName = Replace(f.Name, "'", "")
+
+            Forms!form1!lblFileName.Caption = f.Name
+            Forms!form1.Refresh
+
+            Set db = OpenDatabase(f.Path)
+            rsResults.Open "DatabaseSchemas", conn, adOpenKeyset, adLockBatchOptimistic, adCmdTable
+
+            Set tableList = New Collection
+            tableList.Add db.TableDefs("cfgSessions")
+            tableList.Add db.TableDefs("cfgPrograms")
+        
+            'For Each td In db.TableDefs
+                'tableList.Add td
+            'Next
+            
+            For Each td In tableList
+                For Each fd In td.Fields
+                
+                With rsResults
+                    .AddNew
+                        !fileName = fileName
+                        !insertdate = Now()
+                        !tableName = td.Name
+                        !fieldName = fd.Name
+                        !datatype = fd.Type
+                        On Error GoTo egghead
+                    .Update
+                End With
+                
+                Next
+            Next
+
+            rsResults.UpdateBatch
+            rsResults.Close
+
+        End If
+
+nextFile:
+        Set db = Nothing
+        If fileCount = maxfilecount Then Exit For
+        Forms!form1.Refresh
+        DoEvents
+    Next
+
+
+    Exit Sub
+egghead:
+
+    With rsErrorLog
+        If rsResults.State = adStateOpen Then rsResults.Close
+        'Set conn = GetConnection()
+        'conn.Open
+        .Open "Errors", conn, adOpenKeyset, adLockOptimistic
+        .AddNew
+            !fileName = f.Name
+            !ErrorMessage = Err.Number & ": " & Err.Description
+            !DigName = "GetSchemas"
+            !insertdate = Now()
+        .Update
+        .Close
+    End With
+    'Resume Next
+    Resume nextFile
+
+End Sub
+
+Function SafeFieldName(ByVal fieldName As String) As String
+    fieldName = Replace(fieldName, ".", "_")
+    fieldName = Replace(fieldName, "/", "_")
+    SafeFieldName = fieldName
+End Function
+
 Sub UpdateSchema(source As dao.Recordset, targetTableName)
     Dim f As dao.Field
     Dim cat As ADOX.Catalog
@@ -226,7 +336,8 @@ Sub UpdateSchema(source As dao.Recordset, targetTableName)
     Set t = cat.Tables(targetTableName)
 
     For Each f In source.Fields
-        colName = Replace(f.Name, ".", "_")
+        
+        colName = SafeFieldName(f.Name)
         If ColumnExists(t, colName) = False Then
             If f.Type = dbDate Then
                 comm.ActiveConnection = conn
@@ -287,6 +398,8 @@ Function GetSQLDataType(ByVal AccessDataType As dao.DataTypeEnum) As ADODB.DataT
             GetSQLDataType = adInteger
         Case dbBoolean
             GetSQLDataType = dbInteger
+        Case dbDouble
+            GetSQLDataType = adDouble
         Case Else
             GetSQLDataType = AccessDataType
     End Select
